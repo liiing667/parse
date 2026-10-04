@@ -406,7 +406,13 @@ def extract_format(format, extra_types):
     return locals()
 
 
-PARSE_RE = re.compile(r"({{|}}|{[\w-]*(?:\.[\w-]+|\[[^]]+])*(?::[^}]+)?})")
+PARSE_RE = re.compile(
+    r"({{|}}|{[\w-]*(?:\.[\w-]+|\[[^]]+])*(?:![a-zA-Z])?(?::[^}]+)?})"
+)
+
+
+# allowed "!" conversions, applied to the captured text before type conversion
+ALLOWED_CONVERSIONS = {"s": str, "r": repr}
 
 
 class Parser(object):
@@ -424,6 +430,17 @@ class Parser(object):
         # and to sanity check the repeated instances store away the first
         # field type specification for the named field
         self._name_types = {}
+        # manually numbered fields {0}, {1}, ... mapped to their format
+        # specification, "!" conversion and regex group index, so repeated
+        # numbers can be matched against the first occurrence
+        self._numbered_fields = {}
+        # for each fixed (positional) field, whether it was created
+        # automatically ({}) or manually ({0}); used to detect ambiguous
+        # mixtures of automatic and manual field numbering
+        self._fixed_field_kinds = []
+        # "!" conversions (str/repr) to apply to the captured text before
+        # any type conversion, keyed like _type_conversions
+        self._value_conversions = {}
 
         self._format = format
         if extra_types is None:
@@ -578,6 +595,8 @@ class Parser(object):
         # ok, figure the fixed fields we've pulled out and type convert them
         fixed_fields = list(m.groups())
         for n in self._fixed_fields:
+            if n in self._value_conversions:
+                fixed_fields[n] = self._value_conversions[n](fixed_fields[n])
             if n in self._type_conversions:
                 fixed_fields[n] = self._type_conversions[n](fixed_fields[n], m)
         fixed_fields = tuple(fixed_fields[n] for n in self._fixed_fields)
@@ -589,6 +608,8 @@ class Parser(object):
         for k in self._named_fields:
             korig = self._group_to_name_map[k]
             name_map[korig] = k
+            if k in self._value_conversions:
+                groupdict[k] = self._value_conversions[k](groupdict[k])
             if k in self._type_conversions:
                 value = self._type_conversions[k](groupdict[k], m)
             else:
@@ -660,31 +681,79 @@ class Parser(object):
         else:
             name = field
 
+        # a "!" conversion (e.g. {!r}) may only appear at the end of the
+        # field name, before any format specification
+        conversion = None
+        if len(name) >= 2 and name[-2] == "!":
+            name, conversion = name[:-2], name[-1]
+            if conversion not in ALLOWED_CONVERSIONS:
+                raise ValueError(
+                    "unknown conversion %r in field %r; expected 's' or 'r'"
+                    % (conversion, field)
+                )
+
         # This *should* be more flexible, but parsing complicated structures
         # out of the string is hard (and not necessarily useful) ... and I'm
         # being lazy. So for now `identifier` is "anything starting with a
         # letter" and digit args don't get attribute or element stuff.
         if name and name[0].isalpha():
             if name in self._name_to_group_map:
-                if self._name_types[name] != format:
+                if self._name_types[name] != (format, conversion):
                     raise RepeatedNameError(
                         'field type %r for field "%s" '
                         "does not match previous seen type %r"
-                        % (format, name, self._name_types[name])
+                        % (format, name, self._name_types[name][0])
                     )
                 group = self._name_to_group_map[name]
                 # match previously-seen value
                 return r"(?P=%s)" % group
             else:
                 group = self._to_group_name(name)
-                self._name_types[name] = format
+                self._name_types[name] = (format, conversion)
             self._named_fields.append(group)
             # this will become a group, which must not contain dots
             wrap = r"(?P<%s>%%s)" % group
-        else:
+        elif name.isdigit():
+            # manually numbered field, e.g. {0}; the number is the field's
+            # position in the fixed results
+            number = int(name)
+            if number in self._numbered_fields:
+                prev_format, prev_conversion, prev_group = self._numbered_fields[
+                    number
+                ]
+                if prev_format != format or prev_conversion != conversion:
+                    raise RepeatedNameError(
+                        'field type %r for field "%s" '
+                        "does not match previous seen type %r"
+                        % (format, name, prev_format)
+                    )
+                # match previously-seen value
+                return r"\%d" % (prev_group + 1)
+            if number < len(self._fixed_field_kinds):
+                raise ValueError(
+                    'field "%s" is ambiguous: it refers to the '
+                    "automatically numbered field {} at that position" % name
+                )
+            if number > len(self._fixed_field_kinds):
+                raise ValueError(
+                    'field "%s" is ambiguous: manual field numbering '
+                    "does not match the field's position" % name
+                )
+            self._numbered_fields[number] = (format, conversion, self._group_index)
+            self._fixed_field_kinds.append("manual")
             self._fixed_fields.append(self._group_index)
             wrap = r"(%s)"
             group = self._group_index
+        else:
+            self._fixed_field_kinds.append("auto")
+            self._fixed_fields.append(self._group_index)
+            wrap = r"(%s)"
+            group = self._group_index
+
+        if conversion is not None:
+            # "!" conversions apply to the captured text before any type
+            # conversion is performed
+            self._value_conversions[group] = ALLOWED_CONVERSIONS[conversion]
 
         # simplest case: no type specifier ({} or {name})
         if not format:

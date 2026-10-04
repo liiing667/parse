@@ -39,6 +39,42 @@ def test_numbered():
     )
 
 
+def test_numbered_repeated():
+    # a repeated number back-references the first occurrence
+    _test_expression("{0} {0}", r"(.+?) \1")
+    _test_expression("{0} {1} {0}", r"(.+?) (.+?) \1")
+
+
+def test_numbered_mixed():
+    # numbered fields may be mixed with anonymous and named fields
+    _test_expression("{0} {}", r"(.+?) (.+?)")
+    _test_expression("{} {name} {1}", r"(.+?) (?P<name>.+?) (.+?)")
+
+
+def test_numbered_ambiguous():
+    # manual numbering must not collide with automatic numbering
+    with pytest.raises(ValueError, match='"0"'):
+        parse.compile("{} {0}")
+    with pytest.raises(ValueError, match='"1"'):
+        parse.compile("{0} {} {1}")
+    with pytest.raises(ValueError, match='"1"'):
+        parse.compile("{1} {0}")
+    with pytest.raises(ValueError, match='"2"'):
+        parse.compile("{2} {0} {1}")
+
+
+def test_conversion():
+    _test_expression("{!s}", r"(.+?)")
+    _test_expression("{!r}", r"(.+?)")
+    _test_expression("{name!r}", r"(?P<name>.+?)")
+    _test_expression("{0!r}", r"(.+?)")
+
+
+def test_conversion_invalid():
+    with pytest.raises(ValueError, match="unknown conversion"):
+        parse.compile("{!x}")
+
+
 def test_bird():
     # skip some trailing whitespace
     _test_expression("{:>}", r" *(.+?)")
