@@ -176,6 +176,86 @@ def test_named_repeated_type_mismatch():
         parse.compile("{n:d} {n:w}")
 
 
+def test_numbered():
+    # numbered fields are fixed-position fields
+    r = parse.parse("{0} {1}", "hello world")
+    assert r.fixed == ("hello", "world")
+
+
+def test_numbered_typed():
+    r = parse.parse("{0:d} {1:d}", "1 2")
+    assert r.fixed == (1, 2)
+
+
+def test_numbered_repeated():
+    # a repeated number matches the same value again
+    r = parse.parse("{0} {0}", "x x")
+    assert r.fixed == ("x",)
+    r = parse.parse("{0:d} {0:d}", "1 1")
+    assert r.fixed == (1,)
+
+
+def test_numbered_repeated_fail_value():
+    # test repeated number fails if value mismatches
+    r = parse.parse("{0} {0}", "x y")
+    assert r is None
+
+
+def test_numbered_repeated_type_mismatch():
+    # test repeated number with mismatched type
+    with pytest.raises(parse.RepeatedNameError):
+        parse.compile("{0:d} {0:w}")
+
+
+def test_numbered_mixed():
+    # numbered fields may be mixed with anonymous and named fields
+    r = parse.parse("{0} {}", "hello world")
+    assert r.fixed == ("hello", "world")
+    r = parse.parse("{} {name} {1}", "hello and world")
+    assert r.fixed == ("hello", "world")
+    assert r.named == {"name": "and"}
+
+
+def test_numbered_ambiguous():
+    # mixing manual and automatic numbering ambiguously is an error
+    with pytest.raises(ValueError):
+        parse.compile("{} {0}")
+    with pytest.raises(ValueError):
+        parse.compile("{0} {} {1}")
+    with pytest.raises(ValueError):
+        parse.compile("{1} {0}")
+
+
+def test_conversion_s():
+    # !s applies str() to the captured text
+    r = parse.parse("{!s}", "spam")
+    assert r.fixed == ("spam",)
+    r = parse.parse("{name!s}", "spam")
+    assert r.named == {"name": "spam"}
+
+
+def test_conversion_r():
+    # !r applies repr() to the captured text
+    r = parse.parse("{!r}", "spam")
+    assert r.fixed == ("'spam'",)
+    r = parse.parse("{name!r}", "spam")
+    assert r.named == {"name": "'spam'"}
+    r = parse.parse("{0!r}", "spam")
+    assert r.fixed == ("'spam'",)
+
+
+def test_conversion_before_type_conversion():
+    # !r is applied before the type conversion, so the type conversion
+    # sees (and strips) the repr quotes
+    r = parse.parse("{0!r:d}", "3")
+    assert r.fixed == (3,)
+
+
+def test_conversion_invalid():
+    with pytest.raises(ValueError):
+        parse.compile("{!x}")
+
+
 def test_mixed():
     # pull a fixed and named values out of string
     r = parse.parse("hello {} {name} {} {spam}", "hello world and other beings")

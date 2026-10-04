@@ -73,17 +73,25 @@ Format Syntax
 A basic version of the `Format String Syntax`_ is supported with anonymous
 (fixed-position), named and formatted fields::
 
-   {[field name]:[format spec]}
+   {[field name][!conversion]:[format spec]}
 
 Field names must be a valid Python identifiers, including dotted names;
 element indexes imply dictionaries (see below for example).
 
-Numbered fields are also not supported: the result of parsing will include
-the parsed fields in the order they are parsed.
+Numbered fields (``{0}``, ``{1}``, ...) are also supported and behave like
+anonymous fields, except that the same number may be repeated to match the
+same value again (like repeated named fields). They may be mixed with
+anonymous and named fields as long as the numbering stays unambiguous:
+manually numbered fields must appear in order (``{0}`` before ``{1}``) and
+must not refer to a position already taken by an anonymous ``{}`` field.
+Ambiguous numbering raises a ``ValueError`` when the format is compiled.
 
 The conversion of fields to types other than strings is done based on the
 type in the format specification, which mirrors the ``format()`` behaviour.
-There are no "!" field conversions like ``format()`` has.
+The "!" field conversions ``!s`` and ``!r`` are supported; they apply
+``str()`` or ``repr()`` to the captured text *before* any type conversion
+is performed. ``!r`` is useful for consuming values that appear in repr
+form (quoted) in the input.
 
 Some simple parse() format string examples:
 
@@ -111,6 +119,30 @@ Some simple parse() format string examples:
     True
 
 Note that `in` only works if you have named fields.
+
+Numbered fields may be used instead of names, and repeated to match the
+same value again:
+
+.. code-block:: pycon
+
+    >>> parse("retry: {0} times", "retry: 3 times")
+    <Result ('3',) {}>
+    >>> parse("retry: {0} 次", "retry: 3 次")
+    <Result ('3',) {}>
+    >>> parse("{0} {0}", "spam spam")
+    <Result ('spam',) {}>
+    >>> parse("{0} {0}", "spam eggs") is None
+    True
+
+The ``!s`` and ``!r`` conversions apply ``str()`` / ``repr()`` to the
+captured text before any type conversion:
+
+.. code-block:: pycon
+
+    >>> parse("{!r}", "spam")
+    <Result ("'spam'",) {}>
+    >>> parse("{0!r:d}", "3")     # repr quotes are stripped by :d
+    <Result (3,) {}>
 
 Dotted names and indexes are possible with some limits. Only word identifiers
 are supported (ie. no numeric indexes) and the application must make additional
